@@ -143,7 +143,7 @@ func TestPreFlightSetsDefaultPrivateDir(t *testing.T) {
 	cfg := &runtimeConfig{
 		PolicyPath: filepath.Join(t.TempDir(), "policy.cedar"),
 		SkipCgroup: true,
-		ProxyPort:  "18000",
+		ProxyPort:  defaultProxyPort,
 	}
 
 	if err := preFlight(cfg); err != nil {
@@ -207,7 +207,7 @@ func TestPreFlightRepairsPrivateDirPermissions(t *testing.T) {
 	cfg := &runtimeConfig{
 		PolicyPath: filepath.Join(t.TempDir(), "policy.cedar"),
 		SkipCgroup: true,
-		ProxyPort:  "18000",
+		ProxyPort:  defaultProxyPort,
 	}
 
 	if err := preFlight(cfg); err != nil {
@@ -273,7 +273,7 @@ func TestPreFlightRepairsPrivateKeyPermissions(t *testing.T) {
 	cfg := &runtimeConfig{
 		PolicyPath: filepath.Join(t.TempDir(), "policy.cedar"),
 		SkipCgroup: true,
-		ProxyPort:  "18000",
+		ProxyPort:  defaultProxyPort,
 	}
 
 	if err := preFlight(cfg); err != nil {
