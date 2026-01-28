@@ -959,7 +959,7 @@ func buildLeashArgs(leashName, targetName, cgroupPath, cgroupVolume, leashDir, l
 
 	args = append(args,
 		leashImage,
-		"--daemon",
+		// Note: --daemon is already in the image's ENTRYPOINT
 		"--cgroup", cgroupPath,
 	)
 

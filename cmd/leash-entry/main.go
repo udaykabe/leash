@@ -256,12 +256,14 @@ func emitCgroupPath() error {
 	}
 
 	lines := strings.Split(string(data), "\n")
-	var resolved string
+	var cgroupRelativePath string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
+		// /proc/self/cgroup format: "hierarchy-ID:controller-list:cgroup-path"
+		// cgroup v2 format: "0::/docker/<container-id>"
 		parts := strings.Split(line, ":")
 		var raw string
 		switch len(parts) {
@@ -279,23 +281,22 @@ func emitCgroupPath() error {
 		if !strings.HasPrefix(raw, "/") {
 			raw = "/" + raw
 		}
-		var candidate string
-		if strings.HasPrefix(raw, "/sys/") {
-			candidate = filepath.Clean(raw)
-		} else {
-			candidate = filepath.Clean(filepath.Join("/sys/fs/cgroup", strings.TrimPrefix(raw, "/")))
-		}
-		if candidate != "" {
-			resolved = candidate
-			break
-		}
+		cgroupRelativePath = filepath.Clean(raw)
+		break
 	}
 
-	if resolved == "" {
+	if cgroupRelativePath == "" {
 		return fmt.Errorf("cgroup path not detected; ensure container runs with --cgroupns host")
 	}
 
-	if err := os.WriteFile(cgroupPathFile, []byte(resolved+"\n"), 0o644); err != nil {
+	// Note: We intentionally skip filesystem validation here because the TARGET
+	// container doesn't have /sys/fs/cgroup mounted. The LEASH container (which
+	// has the cgroup mounted) will validate when it receives this path.
+
+	// Write the cgroup-relative path (NOT the filesystem path).
+	// iptables -m cgroup --path requires paths relative to cgroup root,
+	// e.g., "/docker/<id>" not "/sys/fs/cgroup/docker/<id>".
+	if err := os.WriteFile(cgroupPathFile, []byte(cgroupRelativePath+"\n"), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", cgroupPathFile, err)
 	}
 

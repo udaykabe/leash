@@ -108,13 +108,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     wget \
     && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /log /cfg /leash
+RUN mkdir -p /log /cfg /leash /leash-private
 
 ENV LEASH_LOG_DIR=/log \
     LEASH_CFG_DIR=/cfg \
     LEASH_LOG=/log/events.log \
     LEASH_POLICY=/cfg/leash.cedar \
-    LEASH_PROXY_PORT=18000
+    LEASH_PROXY_PORT=18000 \
+    LEASH_PRIVATE_DIR=/leash-private
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/leash", "--daemon"]
 

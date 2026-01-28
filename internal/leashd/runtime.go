@@ -262,14 +262,24 @@ func preFlight(cfg *runtimeConfig) error {
 	if strings.TrimSpace(cfg.CgroupPath) == "" {
 		return fmt.Errorf("cgroup path required (set --cgroup)")
 	}
-	info, err := os.Stat(cfg.CgroupPath)
+	// The cgroup path can be either:
+	// - A cgroup-relative path like "/docker/<id>" (for iptables -m cgroup --path)
+	// - An absolute filesystem path like "/sys/fs/cgroup/docker/<id>" (legacy)
+	// We need to validate the filesystem path exists, but use the cgroup-relative
+	// path for iptables rules.
+	cgroupFsPath := cfg.CgroupPath
+	if !strings.HasPrefix(cfg.CgroupPath, "/sys/fs/cgroup") {
+		// It's a cgroup-relative path; construct the filesystem path for validation
+		cgroupFsPath = filepath.Join("/sys/fs/cgroup", strings.TrimPrefix(cfg.CgroupPath, "/"))
+	}
+	info, err := os.Stat(cgroupFsPath)
 	if err != nil {
-		return fmt.Errorf("invalid cgroup path %q: %w", cfg.CgroupPath, err)
+		return fmt.Errorf("invalid cgroup path %q (checked %s): %w", cfg.CgroupPath, cgroupFsPath, err)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("invalid cgroup path %q: not a directory", cfg.CgroupPath)
 	}
-	controllersPath := filepath.Join(cfg.CgroupPath, "cgroup.controllers")
+	controllersPath := filepath.Join(cgroupFsPath, "cgroup.controllers")
 	if _, err := os.Stat(controllersPath); err != nil {
 		return fmt.Errorf("invalid cgroup path %q: %v", cfg.CgroupPath, err)
 	}

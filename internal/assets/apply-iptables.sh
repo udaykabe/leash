@@ -76,6 +76,7 @@ fi
 # SECURITY: This is a REQUIRED security control - failure is fatal.
 # Requires --cgroupns=host on the container to see host cgroup paths.
 if [ -n "$TARGET_CGROUP" ] && [ -n "$CONTROL_PORT" ]; then
+    echo "leash: cgroup isolation: TARGET_CGROUP='$TARGET_CGROUP' CONTROL_PORT='$CONTROL_PORT'" >&2
     if ! ensure_rule -t filter -C OUTPUT -m cgroup --path "$TARGET_CGROUP" -p tcp --dport "$CONTROL_PORT" -j REJECT; then
         if iptables_cmd -t filter -A OUTPUT -m cgroup --path "$TARGET_CGROUP" -p tcp --dport "$CONTROL_PORT" -j REJECT --reject-with tcp-reset 2>&1; then
             echo "leash: blocked target cgroup $TARGET_CGROUP from reaching control plane port $CONTROL_PORT"
