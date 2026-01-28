@@ -1,9 +1,14 @@
 #!/bin/sh
-set -e
+# NOTE: We intentionally do NOT use set -e here. Each rule is applied
+# individually with error handling to provide better diagnostics and
+# allow partial functionality when some iptables features aren't available.
 
 MITM_PORT=${1:-18000}
 CONTROL_PORT=${2:-}
+TARGET_CGROUP=${3:-}
 PROXY_MARK=${PROXY_MARK:-0x2000}
+
+RULE_ERRORS=0
 
 iptables_cmd() {
     iptables -w "$@"
@@ -16,33 +21,82 @@ ensure_rule() {
     return 1
 }
 
-# Early returns to avoid loops and honor proxy mark
+# Helper to apply a rule with error handling
+apply_rule() {
+    desc="$1"; shift
+    if ! "$@" 2>/dev/null; then
+        echo "leash: WARNING: failed to apply iptables rule: $desc" >&2
+        RULE_ERRORS=$((RULE_ERRORS + 1))
+        return 1
+    fi
+    return 0
+}
+
+# Early return for MITM port to avoid loops
 if ! ensure_rule -t nat -C OUTPUT -p tcp --dport "$MITM_PORT" -j RETURN; then
-    iptables_cmd -t nat -I OUTPUT 1 -p tcp --dport "$MITM_PORT" -j RETURN
+    apply_rule "nat OUTPUT return for MITM port" iptables_cmd -t nat -I OUTPUT 1 -p tcp --dport "$MITM_PORT" -j RETURN
 fi
 
-# Make the OUTPUT chain’s second rule a guard that matches packets carrying
+# Make the OUTPUT chain's second rule a guard that matches packets carrying
 # the connection mark value $PROXY_MARK
 #
-# Net effect: any packet the proxy already marked (so it won’t be re-intercepted)
+# Net effect: any packet the proxy already marked (so it won't be re-intercepted)
 # immediately returns from the NAT chain, preventing loops or re-redirection
 if ! ensure_rule -t nat -C OUTPUT -m mark --mark "$PROXY_MARK" -j RETURN; then
-    iptables_cmd -t nat -I OUTPUT 2 -m mark --mark "$PROXY_MARK" -j RETURN
+    apply_rule "nat OUTPUT return for proxy mark" iptables_cmd -t nat -I OUTPUT 2 -m mark --mark "$PROXY_MARK" -j RETURN
 fi
 
-# HTTP/HTTPS redirects over TCPv6
+# Redirect all TCP to MITM proxy
 if ! ensure_rule -t nat -C OUTPUT -p tcp -j REDIRECT --to-ports "$MITM_PORT"; then
-    iptables_cmd -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports "$MITM_PORT"
+    apply_rule "nat OUTPUT redirect TCP" iptables_cmd -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports "$MITM_PORT"
 fi
 
-# Kill QUIC over IPv6 to force TLS over TCP through the MITM
+# Drop QUIC to force TLS over TCP through the MITM
 if ! ensure_rule -t mangle -C OUTPUT -p udp --dport 443 -j DROP; then
-    iptables_cmd -t mangle -A OUTPUT -p udp --dport 443 -j DROP
+    apply_rule "mangle OUTPUT drop QUIC" iptables_cmd -t mangle -A OUTPUT -p udp --dport 443 -j DROP
 fi
 
-# Block access to the ControlUI from target container
-if [ -n "$CONTROL_PORT" ]; then
-    if ! ensure_rule -t filter -C OUTPUT -o lo -d 127.0.0.1 -p tcp --dport "$CONTROL_PORT" -j REJECT --reject-with tcp-reset; then
-        iptables_cmd -t filter -A OUTPUT -o lo -d 127.0.0.1 -p tcp --dport "$CONTROL_PORT" -j REJECT --reject-with tcp-reset
+# =============================================================================
+# CONTROL PLANE ISOLATION (Defense in Depth)
+# =============================================================================
+# Two layers of protection to prevent target container from reaching leashd API:
+#
+# 1. PRIMARY: Cgroup-based blocking (blocks ALL interfaces - localhost, LAN, etc.)
+#    - Uses xt_cgroup to match packets from target container's cgroup
+#    - FATAL if this fails - it's the primary security boundary
+#    - Requires --cgroupns=host on the container
+#
+# 2. SECONDARY: Loopback blocking (additional hardening)
+#    - Blocks any process in netns from reaching control port on localhost
+#    - Defense in depth - works even if cgroup matching has issues
+# =============================================================================
+
+# PRIMARY: Block target container from reaching leashd control plane on any interface.
+# This prevents a compromised agent from accessing the leashd API.
+# SECURITY: This is a REQUIRED security control - failure is fatal.
+# Requires --cgroupns=host on the container to see host cgroup paths.
+if [ -n "$TARGET_CGROUP" ] && [ -n "$CONTROL_PORT" ]; then
+    if ! ensure_rule -t filter -C OUTPUT -m cgroup --path "$TARGET_CGROUP" -p tcp --dport "$CONTROL_PORT" -j REJECT; then
+        if iptables_cmd -t filter -A OUTPUT -m cgroup --path "$TARGET_CGROUP" -p tcp --dport "$CONTROL_PORT" -j REJECT --reject-with tcp-reset 2>&1; then
+            echo "leash: blocked target cgroup $TARGET_CGROUP from reaching control plane port $CONTROL_PORT"
+        else
+            echo "leash: FATAL: could not apply cgroup-based control plane isolation" >&2
+            echo "leash: This security control is required to prevent target container from accessing leashd API" >&2
+            exit 1
+        fi
     fi
 fi
+
+# SECONDARY: Block access to control port on loopback (defense in depth)
+if [ -n "$CONTROL_PORT" ]; then
+    if ! ensure_rule -t filter -C OUTPUT -o lo -d 127.0.0.1 -p tcp --dport "$CONTROL_PORT" -j REJECT --reject-with tcp-reset; then
+        apply_rule "filter OUTPUT block loopback to control port" iptables_cmd -t filter -A OUTPUT -o lo -d 127.0.0.1 -p tcp --dport "$CONTROL_PORT" -j REJECT --reject-with tcp-reset
+    fi
+fi
+
+# Report summary and exit successfully even if some rules failed
+# (we log warnings above for failed rules)
+if [ "$RULE_ERRORS" -gt 0 ]; then
+    echo "leash: WARNING: $RULE_ERRORS iptables rule(s) failed to apply (network interception may be incomplete)" >&2
+fi
+exit 0

@@ -654,9 +654,16 @@ func (rt *runtimeState) configureNetwork() error {
 
 	fmt.Fprintf(os.Stderr, "leash: applying network interception rules\n")
 	uiPort := portFromAddress(rt.cfg.WebBind)
-	if err := applyNetworkRules(rt.cfg.ProxyPort, uiPort); err != nil {
+	if err := applyNetworkRules(rt.cfg.ProxyPort, uiPort, rt.cfg.CgroupPath); err != nil {
 		return err
 	}
+	logPolicyEvent("network.rules.applied", map[string]any{
+		"proxy_port":   rt.cfg.ProxyPort,
+		"control_port": uiPort,
+		"cgroup_path":  rt.cfg.CgroupPath,
+	})
+
+	// Defense in depth: apply loopback blocking with structured telemetry
 	if err := applyLoopbackBlock(uiPort); err != nil {
 		log.Printf("Warning: failed to apply loopback guard: %v", err)
 	}
@@ -784,23 +791,23 @@ var ip6tablesBinaryName = "ip6tables"
 var nftBinaryName = "nft"
 
 // applyNetworkRules attempts nftables first (v4+v6) then falls back to iptables/ip6tables.
-func applyNetworkRules(proxyPort, controlPort string) error {
+func applyNetworkRules(proxyPort, controlPort, cgroupPath string) error {
 	if proxyPort == "" {
 		proxyPort = defaultProxyPort
 	}
 	// Try nftables first if available
 	if _, err := findNft(); err == nil {
-		if err := applyNftablesRules(proxyPort, controlPort); err == nil {
+		if err := applyNftablesRules(proxyPort, controlPort, cgroupPath); err == nil {
 			return nil
 		} else {
 			log.Printf("Warning: nftables apply failed; falling back to iptables: %v", err)
 		}
 	}
 	// Fallback: iptables + ip6tables (best-effort)
-	return applyIptablesRules(proxyPort, controlPort)
+	return applyIptablesRules(proxyPort, controlPort, cgroupPath)
 }
 
-func applyIptablesRules(proxyPort, controlPort string) error {
+func applyIptablesRules(proxyPort, controlPort, cgroupPath string) error {
 	if proxyPort == "" {
 		proxyPort = defaultProxyPort
 	}
@@ -813,7 +820,7 @@ func applyIptablesRules(proxyPort, controlPort string) error {
 		return fmt.Errorf("shell not found: %w", err)
 	}
 
-	cmd := exec.Command(shell, "-s", proxyPort, controlPort)
+	cmd := exec.Command(shell, "-s", proxyPort, controlPort, cgroupPath)
 	cmd.Stdin = strings.NewReader(assets.ApplyIptablesScript)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -824,7 +831,7 @@ func applyIptablesRules(proxyPort, controlPort string) error {
 
 	// Best-effort IPv6 support: run ip6tables rules if ip6tables exists
 	if p, _ := findIp6tables(); p != "" {
-		v6 := exec.Command(shell, "-s", proxyPort, controlPort)
+		v6 := exec.Command(shell, "-s", proxyPort, controlPort, cgroupPath)
 		v6.Stdin = strings.NewReader(assets.ApplyIp6tablesScript)
 		v6.Stdout = os.Stdout
 		v6.Stderr = os.Stderr
@@ -859,7 +866,7 @@ func findIptables() (string, error) {
 }
 
 // applyNftablesRules runs the embedded nftables script to configure v4+v6.
-func applyNftablesRules(proxyPort, controlPort string) error {
+func applyNftablesRules(proxyPort, controlPort, cgroupPath string) error {
 	if proxyPort == "" {
 		proxyPort = defaultProxyPort
 	}
@@ -870,7 +877,7 @@ func applyNftablesRules(proxyPort, controlPort string) error {
 	if _, err := exec.LookPath(shell); err != nil {
 		return fmt.Errorf("shell not found: %w", err)
 	}
-	cmd := exec.Command(shell, "-s", proxyPort, controlPort)
+	cmd := exec.Command(shell, "-s", proxyPort, controlPort, cgroupPath)
 	cmd.Stdin = strings.NewReader(assets.ApplyNftablesScript)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -893,6 +900,8 @@ func portFromAddress(addr string) string {
 	return ""
 }
 
+// applyLoopbackBlock applies loopback-specific blocking rules with structured telemetry.
+// This provides defense-in-depth on top of the cgroup-based blocking in the scripts.
 func applyLoopbackBlock(port string) error {
 	port = strings.TrimSpace(port)
 	if port == "" {
