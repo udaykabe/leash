@@ -237,7 +237,7 @@ func (ca *CertificateAuthority) GenerateCertificate(host string) (*tls.Certifica
 			Country:      []string{"US"},
 			CommonName:   host,
 		},
-		NotBefore:   time.Now(),
+		NotBefore:   time.Now().Add(-1 * time.Hour),       // 1 hour ago to avoid clock skew issues
 		NotAfter:    time.Now().Add(365 * 24 * time.Hour), // 1 year
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
