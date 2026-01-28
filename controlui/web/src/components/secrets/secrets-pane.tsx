@@ -69,6 +69,7 @@ export function SecretsPane({ defaultOpen = false }: SecretsPaneProps) {
   const activationHistoryRef = useRef<number[]>([]);
   const suppressionTimeoutRef = useRef<number | null>(null);
   const headerTimerRef = useRef<number | null>(null);
+  const scheduleSuppressionReleaseRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     openRef.current = open;
@@ -164,10 +165,15 @@ export function SecretsPane({ defaultOpen = false }: SecretsPaneProps) {
       if (history.length < ACTIVATION_RECOVERY_THRESHOLD) {
         releaseSuppression();
       } else {
-        scheduleSuppressionRelease();
+        scheduleSuppressionReleaseRef.current();
       }
     }, ACTIVATION_BURST_WINDOW_MS);
   }, [releaseSuppression]);
+
+  // Keep ref in sync for recursive calls
+  useEffect(() => {
+    scheduleSuppressionReleaseRef.current = scheduleSuppressionRelease;
+  }, [scheduleSuppressionRelease]);
 
   // Handle activation animation - CLEAN version
   const handleActivation = useCallback((secretId?: string) => {
