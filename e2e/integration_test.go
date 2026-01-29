@@ -739,9 +739,12 @@ func startVariantEnvironment(t *testing.T, cfg variantConfig) *variantEnv {
 	})
 
 	cgroupPath := discoverCgroupPath(t, ctx, targetName)
+	t.Logf("discovered cgroup path: %s", cgroupPath)
 
 	// Mount host's /sys/fs/cgroup directly (empty cgroupVolume triggers this in buildLeashArgs)
-	runDockerOrFatal(t, ctx, buildLeashArgs(leashName, targetName, cgroupPath, "", leashDir, logDir, cfgDir))
+	leashArgs := buildLeashArgs(leashName, targetName, cgroupPath, "", leashDir, logDir, cfgDir)
+	t.Logf("leash docker args: %v", leashArgs)
+	runDockerOrFatal(t, ctx, leashArgs)
 	ensureContainerRunning(t, ctx, leashName)
 
 	waitForManagerLog(t, leashName, "frontend.start", 30*time.Second)
