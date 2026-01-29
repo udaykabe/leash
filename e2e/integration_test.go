@@ -819,10 +819,17 @@ func ensureDir(t *testing.T, path string) string {
 func writeBaselinePolicy(t *testing.T, policyPath string, extra []string) {
 	t.Helper()
 
+	// Note: We include both /bin/ and /usr/bin/ because on some hosts /bin is a
+	// symlink to /usr/bin, causing symlink resolution during policy parsing to
+	// convert /bin/ rules to /usr/bin/. But inside containers (like Alpine),
+	// /bin/ is a real directory, so we need both to cover all cases.
 	base := []string{
 		"allow proc.exec /runc",
 		"allow proc.exec /usr/bin/runc",
 		"allow proc.exec /bin/",
+		"allow proc.exec /usr/bin/",
+		"allow proc.exec /sbin/",
+		"allow proc.exec /usr/sbin/",
 		"allow file.open /",
 		"allow net.send *",
 	}
