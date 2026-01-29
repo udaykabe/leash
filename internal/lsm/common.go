@@ -257,13 +257,21 @@ func parsePolicyLine(line string, lineNum int) (PolicyRule, error) {
 			trimmed = "/"
 		}
 
-		// Try to resolve symlinks; if it fails, fall back to the cleaned path
+		// For directory rules (paths ending with /), skip symlink resolution.
+		// Directory rules are prefix matches and the user's intent is to allow
+		// any path starting with that prefix. Resolving on the policy-writing
+		// machine can break cross-container/cross-machine policies where the
+		// target filesystem has a different layout (e.g., host has /bin -> /usr/bin
+		// symlink but container has real /bin directory).
 		resolved := trimmed
-		if r, err := filepath.EvalSymlinks(trimmed); err == nil && r != "" {
-			resolved = r
-		} else if err != nil {
-			// Emit a warning so users understand why a non-existent path didn't resolve
-			fmt.Fprintf(os.Stderr, "Warning on line %d: failed to resolve path '%s': %v; using as-is\n", lineNum, path, err)
+		if !hasTrailingSlash {
+			// Only resolve symlinks for specific file paths, not directory prefixes
+			if r, err := filepath.EvalSymlinks(trimmed); err == nil && r != "" {
+				resolved = r
+			} else if err != nil {
+				// Emit a warning so users understand why a non-existent path didn't resolve
+				fmt.Fprintf(os.Stderr, "Warning on line %d: failed to resolve path '%s': %v; using as-is\n", lineNum, path, err)
+			}
 		}
 
 		// Re-append trailing slash for directory intent (except root)
