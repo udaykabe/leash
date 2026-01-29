@@ -875,7 +875,12 @@ func startHTTPDebugService(t *testing.T) (int, func()) {
 }
 
 func containerGatewayIP(t *testing.T, ctx context.Context, container string) string {
-	res := runDockerExec(ctx, container, []string{"sh", "-c", "ip route | awk '/default/ {print $3}'"})
+	// Use /proc/net/route instead of 'ip route' because minimal images (debian:testing-slim,
+	// rockylinux:9-minimal) don't have the 'ip' command installed.
+	// The gateway is in hex format in field 3 when field 2 (destination) is 00000000.
+	// We convert from little-endian hex to dotted decimal using pure awk.
+	awkScript := `BEGIN{h["0"]=0;h["1"]=1;h["2"]=2;h["3"]=3;h["4"]=4;h["5"]=5;h["6"]=6;h["7"]=7;h["8"]=8;h["9"]=9;h["A"]=10;h["B"]=11;h["C"]=12;h["D"]=13;h["E"]=14;h["F"]=15} NR>1 && $2=="00000000" {gw=$3; a=h[substr(gw,7,1)]*16+h[substr(gw,8,1)]; b=h[substr(gw,5,1)]*16+h[substr(gw,6,1)]; c=h[substr(gw,3,1)]*16+h[substr(gw,4,1)]; d=h[substr(gw,1,1)]*16+h[substr(gw,2,1)]; print a"."b"."c"."d; exit}`
+	res := runDockerExec(ctx, container, []string{"sh", "-c", fmt.Sprintf("awk '%s' /proc/net/route", awkScript)})
 	if res.err != nil || res.exitCode != 0 {
 		t.Fatalf("determine gateway IP for %s: err=%v exit=%d stderr=%s", container, res.err, res.exitCode, res.stderr)
 	}
