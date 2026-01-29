@@ -720,36 +720,28 @@ func startVariantEnvironment(t *testing.T, cfg variantConfig) *variantEnv {
 
 	targetName := fmt.Sprintf("leash-test-target-%s-%d", cfg.name, time.Now().UnixNano())
 	leashName := fmt.Sprintf("leash-test-%s-%d", cfg.name, time.Now().UnixNano())
-	cgroupVolume := fmt.Sprintf("leash-test-cgroup-%s-%d", cfg.name, time.Now().UnixNano())
 
 	removeContainer(ctx, targetName)
 	removeContainer(ctx, leashName)
-	removeVolume(ctx, cgroupVolume)
-
-	runDockerOrFatal(t, ctx, []string{
-		"volume", "create", cgroupVolume,
-	})
 
 	runDockerOrFatal(t, ctx, []string{
 		"run", "-d", "--privileged",
 		"--name", targetName,
 		"-v", fmt.Sprintf("%s:/leash", leashDir),
-		"-v", fmt.Sprintf("%s:/leash/cgroup", cgroupVolume),
 		fmt.Sprintf("leash-test-%s", cfg.name),
 		"sleep", "3600",
 	})
 	ensureContainerRunning(t, ctx, targetName)
-	ensureCgroupMirror(t, ctx, targetName)
 
 	t.Cleanup(func() {
 		removeContainer(context.Background(), leashName)
 		removeContainer(context.Background(), targetName)
-		removeVolume(context.Background(), cgroupVolume)
 	})
 
 	cgroupPath := discoverCgroupPath(t, ctx, targetName)
 
-	runDockerOrFatal(t, ctx, buildLeashArgs(leashName, targetName, cgroupPath, cgroupVolume, leashDir, logDir, cfgDir))
+	// Mount host's /sys/fs/cgroup directly (empty cgroupVolume triggers this in buildLeashArgs)
+	runDockerOrFatal(t, ctx, buildLeashArgs(leashName, targetName, cgroupPath, "", leashDir, logDir, cfgDir))
 	ensureContainerRunning(t, ctx, leashName)
 
 	waitForManagerLog(t, leashName, "frontend.start", 30*time.Second)
@@ -767,7 +759,7 @@ func startVariantEnvironment(t *testing.T, cfg variantConfig) *variantEnv {
 		variant:      cfg,
 		targetName:   targetName,
 		leashName:    leashName,
-		cgroupVolume: cgroupVolume,
+		cgroupVolume: "", // Mount host cgroup directly
 		policyPath:   policyPath,
 		logPath:      filepath.Join(logDir, "events.log"),
 		logDir:       logDir,
