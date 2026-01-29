@@ -360,7 +360,7 @@ func runExamplePolicyScenarios(t *testing.T, env *variantEnv) {
 			retryUntilDeadline: true,
 			ruleRef:            "deny proc.exec /usr/bin/date (docs/example.cedar)",
 		})
-		env.requireLogContains(t, []string{"event=proc.exec", "exe=\"/usr/bin/date\"", "decision=deny"}, "example/proc-deny-date")
+		env.requireLogContains(t, []string{"event=proc.exec", "exe=\"/usr/bin/date\"", "decision=denied"}, "example/proc-deny-date")
 	})
 
 	t.Run("example/proc-deny-tmp", func(t *testing.T) {
@@ -373,7 +373,7 @@ func runExamplePolicyScenarios(t *testing.T, env *variantEnv) {
 			retryUntilDeadline: true,
 			ruleRef:            "deny proc.exec /tmp/ (docs/example.cedar)",
 		})
-		env.requireLogContains(t, []string{"/tmp/leash-deny.sh", "decision=deny"}, "example/proc-deny-tmp")
+		env.requireLogContains(t, []string{"/tmp/leash-deny.sh", "decision=denied"}, "example/proc-deny-tmp")
 	})
 
 	t.Run("example/net-allow-jaytaylor", func(t *testing.T) {
@@ -405,7 +405,7 @@ func runExamplePolicyScenarios(t *testing.T, env *variantEnv) {
 			retryUntilDeadline: true,
 			ruleRef:            "deny net.send *.facebook.com (docs/example.cedar)",
 		})
-		env.requireLogContains(t, []string{"event=net.send", "host=www.facebook.com", "decision=deny"}, "example/net-deny-facebook")
+		env.requireLogContains(t, []string{"event=net.send", "host=www.facebook.com", "decision=denied"}, "example/net-deny-facebook")
 	})
 }
 
