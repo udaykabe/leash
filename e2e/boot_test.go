@@ -778,6 +778,9 @@ func waitForManagerLog(t *testing.T, container, needle string, timeout time.Dura
 	}
 
 	if err := pollReadiness(ctx, timeout, readinessCheck); err != nil {
+		// Capture docker logs for the container
+		logs, _, _ := runDockerCommand(t, 10*time.Second, "logs", container)
+		t.Logf("[diag] docker logs %s:\n%s", container, logs)
 		logHTTPDiagnostics(t, "", container)
 		t.Fatalf("timed out waiting for %q in manager logs", needle)
 	}

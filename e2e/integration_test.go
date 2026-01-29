@@ -928,7 +928,7 @@ func removeVolume(ctx context.Context, name string) {
 
 func buildLeashArgs(leashName, targetName, cgroupPath, cgroupVolume, leashDir, logDir, cfgDir string) []string {
 	args := []string{
-		"run", "-d", "--rm",
+		"run", "-d",
 		"--name", leashName,
 		"--privileged",
 		"--cap-add", "NET_ADMIN",
