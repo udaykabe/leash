@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -312,10 +313,47 @@ func parsePolicyLine(line string, lineNum int) (PolicyRule, error) {
 	return rule, nil
 }
 
-// ConvertToFileOpenRules converts PolicyRules to FileOpenLsm PolicyRules
+// sortPolicyRulesForBPF sorts policy rules for BPF first-match evaluation.
+// The BPF program iterates rules in order and returns on first match, so we need:
+// 1. More specific paths (longer) before less specific paths
+// 2. For same-length paths, later rules first (so appended rules override baseline)
+//
+// This ensures:
+// - "deny /etc/passwd" is checked before "allow /" can match (specificity)
+// - "allow /sbin/apk" can override "deny /sbin/apk" if appended later (recency)
+func sortPolicyRulesForBPF(rules []PolicyRule) []PolicyRule {
+	// Track original indices to preserve "later wins" for same-length paths
+	type indexedRule struct {
+		idx  int
+		rule PolicyRule
+	}
+	indexed := make([]indexedRule, len(rules))
+	for i, r := range rules {
+		indexed[i] = indexedRule{idx: i, rule: r}
+	}
+
+	slices.SortStableFunc(indexed, func(a, b indexedRule) int {
+		// First: longer paths first (more specific matches first)
+		if a.rule.PathLen != b.rule.PathLen {
+			return int(b.rule.PathLen - a.rule.PathLen)
+		}
+		// Second: later rules first (higher original index wins)
+		return b.idx - a.idx
+	})
+
+	sorted := make([]PolicyRule, len(rules))
+	for i, ir := range indexed {
+		sorted[i] = ir.rule
+	}
+	return sorted
+}
+
+// ConvertToFileOpenRules converts PolicyRules to FileOpenLsm PolicyRules.
+// Rules are sorted so deny rules and more specific paths are checked first.
 func ConvertToFileOpenRules(rules []PolicyRule) []OpenPolicyRule {
+	sorted := sortPolicyRulesForBPF(rules)
 	var converted []OpenPolicyRule
-	for _, rule := range rules {
+	for _, rule := range sorted {
 		converted = append(converted, OpenPolicyRule{
 			Action:      uint32(rule.Action),
 			Operation:   uint32(rule.Operation),
@@ -327,10 +365,12 @@ func ConvertToFileOpenRules(rules []PolicyRule) []OpenPolicyRule {
 	return converted
 }
 
-// ConvertToExecRules converts PolicyRules to ExecLsm ExecPolicyRules
+// ConvertToExecRules converts PolicyRules to ExecLsm ExecPolicyRules.
+// Rules are sorted so deny rules and more specific paths are checked first.
 func ConvertToExecRules(rules []PolicyRule) []ExecPolicyRule {
+	sorted := sortPolicyRulesForBPF(rules)
 	var converted []ExecPolicyRule
-	for _, rule := range rules {
+	for _, rule := range sorted {
 		newRule := ExecPolicyRule{
 			Action:      rule.Action,
 			Operation:   rule.Operation,
