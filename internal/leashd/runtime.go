@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -364,6 +365,16 @@ func initRuntime(cfg *runtimeConfig, leashDir string) (*runtimeState, error) {
 	logger, err := lsm.NewSharedLogger(cfg.LogPath)
 	if err != nil {
 		return nil, err
+	}
+
+	// Redirect standard logger to write to both stdout and the log file
+	// so that policy events (via log.Printf) are captured in the log file
+	if cfg.LogPath != "" {
+		logFile, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open log file for standard logger: %w", err)
+		}
+		log.SetOutput(io.MultiWriter(os.Stdout, logFile))
 	}
 
 	wsHub := websockethub.NewWebSocketHub(logger, cfg.HistorySize, cfg.BulkMaxEvents, cfg.BulkMaxBytes)
