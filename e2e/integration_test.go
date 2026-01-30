@@ -226,7 +226,7 @@ func runBaselinePolicyScenarios(t *testing.T, env *variantEnv) {
 
 	t.Run("baseline/file-open-deny", func(t *testing.T) {
 		env.requireEnforcement(t)
-		appendPolicyRule(t, env.policyPath, "deny file.open /etc/os-release")
+		env.appendPolicyRuleAndSync(t, "deny file.open /etc/os-release")
 		env.runCommand(t, commandExpectation{
 			name:               "baseline/file-open-deny",
 			command:            []string{"cat", "/etc/os-release"},
@@ -248,7 +248,7 @@ func runBaselinePolicyScenarios(t *testing.T, env *variantEnv) {
 	})
 
 	t.Run("baseline/proc-allow-path", func(t *testing.T) {
-		appendPolicyRule(t, env.policyPath, env.variant.allowRule)
+		env.appendPolicyRuleAndSync(t, env.variant.allowRule)
 		env.runCommand(t, commandExpectation{
 			name:               "baseline/proc-allow-path",
 			command:            env.variant.allowExecCmd,
@@ -260,7 +260,7 @@ func runBaselinePolicyScenarios(t *testing.T, env *variantEnv) {
 
 	t.Run("baseline/proc-deny-arguments", func(t *testing.T) {
 		env.requireEnforcement(t)
-		prependPolicyRule(t, env.policyPath, env.variant.denyArgsRule)
+		env.prependPolicyRuleAndSync(t, env.variant.denyArgsRule)
 		env.runCommand(t, commandExpectation{
 			name:               "baseline/proc-deny-arguments",
 			command:            env.variant.denyArgsCmd,
@@ -282,7 +282,7 @@ func runBaselinePolicyScenarios(t *testing.T, env *variantEnv) {
 
 	t.Run("baseline/net-deny", func(t *testing.T) {
 		env.requireEnforcement(t)
-		appendPolicyRule(t, env.policyPath, "deny net.send 1.1.1.1")
+		env.appendPolicyRuleAndSync(t, "deny net.send 1.1.1.1")
 		env.runCommand(t, commandExpectation{
 			name:               "baseline/net-deny",
 			command:            env.variant.pingCmd,
@@ -294,7 +294,7 @@ func runBaselinePolicyScenarios(t *testing.T, env *variantEnv) {
 
 	t.Run("baseline/net-allow-https", func(t *testing.T) {
 		env.requireEnforcement(t)
-		appendPolicyRule(t, env.policyPath, "allow proc.exec /usr/bin/ssl_client")
+		env.appendPolicyRuleAndSync(t, "allow proc.exec /usr/bin/ssl_client")
 		env.runCommand(t, commandExpectation{
 			name:               "baseline/net-allow-https",
 			command:            env.variant.wgetCmd(env.httpBinHost, env.httpBinPort),
@@ -306,7 +306,7 @@ func runBaselinePolicyScenarios(t *testing.T, env *variantEnv) {
 
 	t.Run("baseline/http-rewrite", func(t *testing.T) {
 		env.requireEnforcement(t)
-		appendPolicyRule(t, env.policyPath, fmt.Sprintf("allow http.rewrite %s header:Authorization:Bearer demo-secret123", httpBinDomain))
+		env.appendPolicyRuleAndSync(t, fmt.Sprintf("allow http.rewrite %s header:Authorization:Bearer demo-secret123", httpBinDomain))
 		env.runCommand(t, commandExpectation{
 			name:               "baseline/http-rewrite",
 			command:            env.variant.wgetHeaderCmd(env.httpBinHost, env.httpBinPort),
@@ -318,7 +318,7 @@ func runBaselinePolicyScenarios(t *testing.T, env *variantEnv) {
 
 	t.Run("baseline/net-deny-host", func(t *testing.T) {
 		env.requireEnforcement(t)
-		appendPolicyRule(t, env.policyPath, fmt.Sprintf("deny net.send %s", httpBinDomain))
+		env.appendPolicyRuleAndSync(t, fmt.Sprintf("deny net.send %s", httpBinDomain))
 		env.runCommand(t, commandExpectation{
 			name:               "baseline/net-deny-host",
 			command:            env.variant.wgetCmd(env.httpBinHost, env.httpBinPort),
@@ -455,6 +455,52 @@ func (env *variantEnv) runCommand(t *testing.T, exp commandExpectation) {
 
 func (env *variantEnv) requireEnforcement(t *testing.T) {
 	t.Helper()
+}
+
+// appendPolicyRuleAndSync appends a policy rule and touches the file from inside
+// the leash container to force the policy watcher to see the change. Docker bind
+// mounts don't reliably propagate file modification times from host to container.
+func (env *variantEnv) appendPolicyRuleAndSync(t *testing.T, rule string) {
+	t.Helper()
+	appendPolicyRule(t, env.policyPath, rule)
+	env.touchPolicyInContainer(t)
+}
+
+// prependPolicyRuleAndSync prepends a policy rule and touches the file from inside
+// the leash container to force the policy watcher to see the change.
+func (env *variantEnv) prependPolicyRuleAndSync(t *testing.T, rule string) {
+	t.Helper()
+	prependPolicyRule(t, env.policyPath, rule)
+	env.touchPolicyInContainer(t)
+}
+
+// touchPolicyInContainer rewrites the policy file from inside the container
+// to trigger the file watcher. Docker bind mounts don't reliably propagate
+// mtime changes, and signal forwarding through tini is unreliable.
+func (env *variantEnv) touchPolicyInContainer(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(env.ctx, 5*time.Second)
+	defer cancel()
+
+	// Read the current policy content from the host
+	content, err := os.ReadFile(env.policyPath)
+	if err != nil {
+		t.Fatalf("failed to read policy file: %v", err)
+	}
+
+	// Write the policy file from inside the container using a shell command.
+	// This ensures the filesystem events are generated from the container's
+	// perspective, which the file watcher can reliably detect.
+	// Use printf with %s to handle multi-line content safely.
+	writeCmd := exec.CommandContext(ctx, "docker", "exec", "-i", env.leashName,
+		"sh", "-c", "cat > /cfg/policy.cedar")
+	writeCmd.Stdin = bytes.NewReader(content)
+	if out, err := writeCmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to write policy file in container: %v (output: %s)", err, out)
+	}
+
+	// Wait for the file watcher to detect the change and reload (polls every 1s)
+	time.Sleep(2 * time.Second)
 }
 
 func (env *variantEnv) failCommand(t *testing.T, exp commandExpectation, res execResult, extra string) {
@@ -819,17 +865,32 @@ func ensureDir(t *testing.T, path string) string {
 func writeBaselinePolicy(t *testing.T, policyPath string, extra []string) {
 	t.Helper()
 
+	// Baseline policy uses directory-based allows with explicit denies for package managers.
+	// This approach:
+	// - Allows most utilities via directory rules (simpler, fewer Cedar policies)
+	// - Explicitly denies package managers so proc-deny-path tests work
+	// - Uses forbid rules which take precedence over permit rules in Cedar
+	//
 	// Note: We include both /bin/ and /usr/bin/ because on some hosts /bin is a
-	// symlink to /usr/bin, causing symlink resolution during policy parsing to
-	// convert /bin/ rules to /usr/bin/. But inside containers (like Alpine),
-	// /bin/ is a real directory, so we need both to cover all cases.
+	// symlink to /usr/bin, but inside containers (like Alpine) it may be real.
 	base := []string{
+		// Deny package managers first (forbid takes precedence over permit)
+		"deny proc.exec /sbin/apk",        // Alpine
+		"deny proc.exec /usr/bin/apt",     // Debian/Ubuntu
+		"deny proc.exec /usr/bin/apt-get", // Debian/Ubuntu
+		"deny proc.exec /usr/bin/dpkg",    // Debian/Ubuntu
+		"deny proc.exec /usr/bin/dnf",     // Rocky/Fedora
+		"deny proc.exec /usr/bin/yum",     // Rocky/CentOS
+		"deny proc.exec /usr/bin/rpm",     // Rocky/CentOS
+		// Container runtime
 		"allow proc.exec /runc",
 		"allow proc.exec /usr/bin/runc",
+		// Allow standard binary directories
 		"allow proc.exec /bin/",
 		"allow proc.exec /usr/bin/",
 		"allow proc.exec /sbin/",
 		"allow proc.exec /usr/sbin/",
+		// File and network access
 		"allow file.open /",
 		"allow net.send *",
 	}
@@ -1198,8 +1259,32 @@ func writeCedarPolicy(t *testing.T, policyPath string, ps *lsm.PolicySet, rewrit
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
-	if err := os.WriteFile(policyPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write Cedar policy: %v", err)
+
+	// Use atomic write-to-temp + rename pattern to ensure Docker volume mounts
+	// see the file change. In-place writes may not update the modification time
+	// visible to the container due to bind mount caching.
+	tmpPath := policyPath + ".tmp"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		t.Fatalf("create temp Cedar policy %s: %v", tmpPath, err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		t.Fatalf("write temp Cedar policy %s: %v", tmpPath, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		t.Fatalf("sync temp Cedar policy %s: %v", tmpPath, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		t.Fatalf("close temp Cedar policy %s: %v", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, policyPath); err != nil {
+		os.Remove(tmpPath)
+		t.Fatalf("rename Cedar policy %s -> %s: %v", tmpPath, policyPath, err)
 	}
 }
 
