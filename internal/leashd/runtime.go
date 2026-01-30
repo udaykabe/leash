@@ -459,6 +459,10 @@ func initRuntime(cfg *runtimeConfig, leashDir string) (*runtimeState, error) {
 }
 
 func (rt *runtimeState) Run() error {
+	// Start SIGHUP handler early so signals during bootstrap don't crash the daemon.
+	// The handler will queue reloads; actual policy reload happens after activation.
+	go rt.handleSIGHUP()
+
 	if err := rt.startFrontend(); err != nil {
 		return err
 	}
@@ -507,6 +511,17 @@ func (rt *runtimeState) activate() error {
 	logPolicyEvent("bootstrap.activate", map[string]any{"status": "ok"})
 	rt.policyReady.Store(true)
 	return nil
+}
+
+// handleSIGHUP listens for SIGHUP signals and triggers policy reloads.
+// This runs in a separate goroutine alongside the main LSM manager loop.
+func (rt *runtimeState) handleSIGHUP() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGHUP)
+	for range sigChan {
+		logPolicyEvent("signal.sighup", map[string]any{"action": "reload"})
+		rt.reloadPolicy()
+	}
 }
 
 func (rt *runtimeState) waitForBootstrap() error {
@@ -568,6 +583,45 @@ func waitForShutdown() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
+}
+
+// reloadPolicy forces a reload of the Cedar policy file.
+// This is typically triggered by SIGHUP.
+func (rt *runtimeState) reloadPolicy() {
+	cfg, err := policy.Parse(rt.cfg.PolicyPath)
+	if err != nil {
+		logPolicyEvent("policy.reload", map[string]any{"source": "sighup", "error": err.Error()})
+		return
+	}
+	if err := rt.policyManager.UpdateFileRules(cfg.LSMPolicies, cfg.HTTPRewrites); err != nil {
+		logPolicyEvent("policy.reload", map[string]any{"source": "sighup", "error": err.Error()})
+		return
+	}
+	logPolicyEvent("policy.reload", map[string]any{
+		"source":        "sighup",
+		"lsm_open":      len(cfg.LSMPolicies.Open),
+		"lsm_exec":      len(cfg.LSMPolicies.Exec),
+		"lsm_connect":   len(cfg.LSMPolicies.Connect),
+		"http_rewrites": len(cfg.HTTPRewrites),
+	})
+	rt.policyReady.Store(true)
+}
+
+// waitForShutdownWithReload blocks until SIGTERM/SIGINT while handling SIGHUP for reload.
+func (rt *runtimeState) waitForShutdownWithReload() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	for {
+		sig := <-sigChan
+		if sig == syscall.SIGHUP {
+			logPolicyEvent("signal.sighup", map[string]any{"action": "reload"})
+			rt.reloadPolicy()
+			continue
+		}
+		// SIGTERM or SIGINT - shutdown
+		logPolicyEvent("shutdown.signal", map[string]any{"signal": sig.String()})
+		break
+	}
 }
 
 func (rt *runtimeState) Close() {
@@ -820,10 +874,46 @@ var ip6tablesBinaryName = "ip6tables"
 var nftBinaryName = "nft"
 
 // applyNetworkRules attempts nftables first (v4+v6) then falls back to iptables/ip6tables.
+// Retries with exponential backoff up to 30 seconds to handle transient failures.
 func applyNetworkRules(proxyPort, controlPort, cgroupPath string) error {
 	if proxyPort == "" {
 		proxyPort = defaultProxyPort
 	}
+
+	const maxTimeout = 30 * time.Second
+	backoff := 100 * time.Millisecond
+	deadline := time.Now().Add(maxTimeout)
+	var lastErr error
+
+	for attempt := 1; time.Now().Before(deadline); attempt++ {
+		lastErr = tryApplyNetworkRules(proxyPort, controlPort, cgroupPath)
+		if lastErr == nil {
+			if attempt > 1 {
+				log.Printf("network rules applied successfully on attempt %d", attempt)
+			}
+			return nil
+		}
+
+		// Check if we have time for another attempt
+		if time.Now().Add(backoff).After(deadline) {
+			break
+		}
+
+		log.Printf("network rules attempt %d failed (retrying in %v): %v", attempt, backoff, lastErr)
+		time.Sleep(backoff)
+
+		// Exponential backoff, capped at 5 seconds
+		backoff = backoff * 2
+		if backoff > 5*time.Second {
+			backoff = 5 * time.Second
+		}
+	}
+
+	return fmt.Errorf("failed to apply network rules after %v: %w", maxTimeout, lastErr)
+}
+
+// tryApplyNetworkRules makes a single attempt to apply network rules.
+func tryApplyNetworkRules(proxyPort, controlPort, cgroupPath string) error {
 	// Try nftables first if available
 	if _, err := findNft(); err == nil {
 		if err := applyNftablesRules(proxyPort, controlPort, cgroupPath); err == nil {
