@@ -44,6 +44,7 @@ func (l *SharedLogger) SetBroadcaster(broadcaster LogBroadcaster) {
 
 // Write writes a full log entry line in a thread-safe way.
 // Automatically adds a newline if the entry doesn't end with one.
+// Always writes to stdout for consistency with BPF/LSM events, and optionally to file.
 func (l *SharedLogger) Write(entry string) error {
 	if l == nil {
 		return fmt.Errorf("logger is not initialized")
@@ -55,6 +56,9 @@ func (l *SharedLogger) Write(entry string) error {
 	if len(entry) > 0 && entry[len(entry)-1] != '\n' {
 		entry += "\n"
 	}
+
+	// Always write to stdout for consistency with BPF/LSM event logging
+	fmt.Print(entry)
 
 	// Write to file when configured
 	if l.file != nil {
