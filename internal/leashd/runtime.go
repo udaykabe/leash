@@ -914,16 +914,40 @@ func applyNetworkRules(proxyPort, controlPort, cgroupPath string) error {
 
 // tryApplyNetworkRules makes a single attempt to apply network rules.
 func tryApplyNetworkRules(proxyPort, controlPort, cgroupPath string) error {
+	// Convert filesystem path to relative cgroup path for iptables/nftables matching.
+	// iptables -m cgroup --path expects paths like "/docker/<id>", not "/sys/fs/cgroup/docker/<id>".
+	cgroupRelative := toRelativeCgroupPath(cgroupPath)
+
 	// Try nftables first if available
 	if _, err := findNft(); err == nil {
-		if err := applyNftablesRules(proxyPort, controlPort, cgroupPath); err == nil {
+		if err := applyNftablesRules(proxyPort, controlPort, cgroupRelative); err == nil {
 			return nil
 		} else {
 			log.Printf("Warning: nftables apply failed; falling back to iptables: %v", err)
 		}
 	}
 	// Fallback: iptables + ip6tables (best-effort)
-	return applyIptablesRules(proxyPort, controlPort, cgroupPath)
+	return applyIptablesRules(proxyPort, controlPort, cgroupRelative)
+}
+
+// toRelativeCgroupPath converts a filesystem cgroup path to a relative cgroup path.
+// iptables/nftables cgroup matching requires relative paths like "/docker/<id>",
+// not filesystem paths like "/sys/fs/cgroup/docker/<id>".
+func toRelativeCgroupPath(cgroupPath string) string {
+	if cgroupPath == "" {
+		return ""
+	}
+	// Strip /sys/fs/cgroup prefix if present
+	const cgroupMount = "/sys/fs/cgroup"
+	if strings.HasPrefix(cgroupPath, cgroupMount) {
+		relative := strings.TrimPrefix(cgroupPath, cgroupMount)
+		if relative == "" {
+			return "" // Was just the mount point, no valid relative path
+		}
+		return relative
+	}
+	// Already a relative path
+	return cgroupPath
 }
 
 func applyIptablesRules(proxyPort, controlPort, cgroupPath string) error {
