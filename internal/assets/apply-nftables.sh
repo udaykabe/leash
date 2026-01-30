@@ -62,12 +62,28 @@ ensure_rule() {
     return 0
 }
 
+# insert_rule: same as ensure_rule but inserts at beginning of chain (for priority)
+insert_rule() {
+    fam=$1; tbl=$2; chain=$3; shift 3
+    comment=$1; shift 1
+    if nft_cmd list chain "$fam" "$tbl" "$chain" 2>/dev/null | grep -F "comment \"$comment\"" >/dev/null; then
+        return 0
+    fi
+    if ! nft_cmd insert rule "$fam" "$tbl" "$chain" "$@" comment "$comment" 2>/dev/null; then
+        echo "leash: WARNING: failed to insert nftables rule $comment" >&2
+        RULE_ERRORS=$((RULE_ERRORS + 1))
+        return 1
+    fi
+    return 0
+}
+
 # IPv4 NAT OUTPUT
 ensure_table ip leash
 ensure_chain ip leash out_nat { type nat hook output priority -100\; }
 ensure_rule ip leash out_nat "leash:return-mitm" tcp dport $MITM_PORT return
 ensure_rule ip leash out_nat "leash:return-mark" meta mark $PROXY_MARK return
-ensure_rule ip leash out_nat "leash:return-loopback" oifname lo return
+# Loopback skip must be INSERTED to ensure it comes before the redirect rule
+insert_rule ip leash out_nat "leash:return-loopback" oifname lo return
 ensure_rule ip leash out_nat "leash:redir-tcp" tcp dport != $MITM_PORT redirect to :$MITM_PORT
 
 # IPv6 NAT OUTPUT
@@ -75,7 +91,8 @@ ensure_table ip6 leash6
 ensure_chain ip6 leash6 out_nat { type nat hook output priority -100\; }
 ensure_rule ip6 leash6 out_nat "leash:return-mitm" tcp dport $MITM_PORT return
 ensure_rule ip6 leash6 out_nat "leash:return-mark" meta mark $PROXY_MARK return
-ensure_rule ip6 leash6 out_nat "leash:return-loopback" oifname lo return
+# Loopback skip must be INSERTED to ensure it comes before the redirect rule
+insert_rule ip6 leash6 out_nat "leash:return-loopback" oifname lo return
 ensure_rule ip6 leash6 out_nat "leash:redir-tcp" tcp dport != $MITM_PORT redirect to :$MITM_PORT
 
 # inet route hook to drop QUIC for both families
