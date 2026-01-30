@@ -3,6 +3,7 @@ package policy
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -60,10 +61,12 @@ func WatchCedar(path string, interval time.Duration, onUpdate func(*Config), onE
 		// Track the last successful mod time separately so partial writes keep retrying until a valid config is parsed.
 		lastSuccessModTime := initialModTime
 		var lastErrorModTime time.Time
+		log.Printf("policy watcher started: path=%s initial_mtime=%v", path, initialModTime)
 
 		for {
 			select {
 			case <-stop:
+				log.Printf("policy watcher stopped")
 				return
 			case <-ticker.C:
 				info, statErr := os.Stat(path)
