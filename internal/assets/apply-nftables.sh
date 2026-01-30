@@ -67,6 +67,7 @@ ensure_table ip leash
 ensure_chain ip leash out_nat { type nat hook output priority -100\; }
 ensure_rule ip leash out_nat "leash:return-mitm" tcp dport $MITM_PORT return
 ensure_rule ip leash out_nat "leash:return-mark" meta mark $PROXY_MARK return
+ensure_rule ip leash out_nat "leash:return-loopback" oifname lo return
 ensure_rule ip leash out_nat "leash:redir-tcp" tcp dport != $MITM_PORT redirect to :$MITM_PORT
 
 # IPv6 NAT OUTPUT
@@ -74,6 +75,7 @@ ensure_table ip6 leash6
 ensure_chain ip6 leash6 out_nat { type nat hook output priority -100\; }
 ensure_rule ip6 leash6 out_nat "leash:return-mitm" tcp dport $MITM_PORT return
 ensure_rule ip6 leash6 out_nat "leash:return-mark" meta mark $PROXY_MARK return
+ensure_rule ip6 leash6 out_nat "leash:return-loopback" oifname lo return
 ensure_rule ip6 leash6 out_nat "leash:redir-tcp" tcp dport != $MITM_PORT redirect to :$MITM_PORT
 
 # inet route hook to drop QUIC for both families

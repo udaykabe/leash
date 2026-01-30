@@ -46,7 +46,13 @@ if ! ensure_rule -t nat -C OUTPUT -m mark --mark "$PROXY_MARK" -j RETURN; then
     apply_rule "nat OUTPUT return for proxy mark" iptables_cmd -t nat -I OUTPUT 2 -m mark --mark "$PROXY_MARK" -j RETURN
 fi
 
-# Redirect all TCP to MITM proxy
+# Skip loopback traffic - local connections should not be intercepted by MITM
+# This allows processes to communicate with local services (e.g., httpd on localhost)
+if ! ensure_rule -t nat -C OUTPUT -o lo -j RETURN; then
+    apply_rule "nat OUTPUT return for loopback" iptables_cmd -t nat -I OUTPUT 3 -o lo -j RETURN
+fi
+
+# Redirect all TCP to MITM proxy (external traffic only, loopback excluded above)
 if ! ensure_rule -t nat -C OUTPUT -p tcp -j REDIRECT --to-ports "$MITM_PORT"; then
     apply_rule "nat OUTPUT redirect TCP" iptables_cmd -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports "$MITM_PORT"
 fi
