@@ -101,7 +101,8 @@ ensure_rule inet leash out_route "leash:drop-quic" udp dport 443 drop
 # PRIMARY: Block target cgroup from reaching leashd control plane on any interface.
 # This prevents a compromised agent from accessing the leashd API.
 # Uses inet family to cover both IPv4 and IPv6.
-# SECURITY: This is a REQUIRED security control - failure is fatal.
+# NOTE: This is best-effort - if cgroup matching isn't supported, we fall back to
+# loopback-only blocking below.
 # Requires --cgroupns=host on the container to see host cgroup paths.
 if [ -n "$TARGET_CGROUP" ] && [ -n "$CONTROL_PORT" ]; then
     ensure_chain inet leash out_filter { type filter hook output priority 0\; }
@@ -111,9 +112,9 @@ if [ -n "$TARGET_CGROUP" ] && [ -n "$CONTROL_PORT" ]; then
     elif nft_cmd add rule inet leash out_filter socket cgroupv2 level 1 "$TARGET_CGROUP" tcp dport $CONTROL_PORT reject with tcp reset comment "leash:block-control-plane" 2>&1; then
         echo "leash: blocked target cgroup $TARGET_CGROUP from reaching control plane port $CONTROL_PORT (nftables)"
     else
-        echo "leash: FATAL: could not apply cgroup-based control plane isolation (nftables)" >&2
-        echo "leash: This security control is required to prevent target container from accessing leashd API" >&2
-        exit 1
+        echo "leash: WARNING: cgroup-based control plane isolation failed (nftables)" >&2
+        echo "leash: Falling back to loopback-only blocking - control plane protected on localhost only" >&2
+        RULE_ERRORS=$((RULE_ERRORS + 1))
     fi
 fi
 

@@ -79,7 +79,8 @@ fi
 
 # PRIMARY: Block target container from reaching leashd control plane on any interface.
 # This prevents a compromised agent from accessing the leashd API.
-# SECURITY: This is a REQUIRED security control - failure is fatal.
+# NOTE: This is best-effort - if cgroup matching isn't supported (e.g., missing xt_cgroup
+# module, invalid cgroup path format), we fall back to loopback-only blocking below.
 # Requires --cgroupns=host on the container to see host cgroup paths.
 if [ -n "$TARGET_CGROUP" ] && [ -n "$CONTROL_PORT" ]; then
     echo "leash: cgroup isolation: TARGET_CGROUP='$TARGET_CGROUP' CONTROL_PORT='$CONTROL_PORT'" >&2
@@ -87,9 +88,9 @@ if [ -n "$TARGET_CGROUP" ] && [ -n "$CONTROL_PORT" ]; then
         if iptables_cmd -t filter -A OUTPUT -m cgroup --path "$TARGET_CGROUP" -p tcp --dport "$CONTROL_PORT" -j REJECT --reject-with tcp-reset 2>&1; then
             echo "leash: blocked target cgroup $TARGET_CGROUP from reaching control plane port $CONTROL_PORT"
         else
-            echo "leash: FATAL: could not apply cgroup-based control plane isolation" >&2
-            echo "leash: This security control is required to prevent target container from accessing leashd API" >&2
-            exit 1
+            echo "leash: WARNING: cgroup-based control plane isolation failed (xt_cgroup may not be available)" >&2
+            echo "leash: Falling back to loopback-only blocking - control plane protected on localhost only" >&2
+            RULE_ERRORS=$((RULE_ERRORS + 1))
         fi
     fi
 fi
